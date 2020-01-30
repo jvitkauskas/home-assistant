@@ -44,6 +44,7 @@ FLOWS = [
     "ios",
     "ipma",
     "iqvia",
+    "it600",
     "izone",
     "life360",
     "lifx",
