@@ -1425,6 +1425,9 @@ pyoppleio==1.0.5
 # homeassistant.components.iota
 pyota==2.0.5
 
+# homeassistant.components.it600
+pyit600==0.0.1
+
 # homeassistant.components.opentherm_gw
 pyotgw==0.5b1
 

@@ -3,7 +3,7 @@
   "name": "Salus IT600 smart home gateway",
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/it600",
-  "requirements": [],
+  "requirements": ["pyit600=0.0.1"],
   "ssdp": [],
   "zeroconf": ["__salus-local._tcp.local."],
   "homekit": {},

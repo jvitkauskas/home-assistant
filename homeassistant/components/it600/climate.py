@@ -2,7 +2,14 @@
 import logging
 from random import randrange
 
-from pyintesishome import IHAuthenticationError, IHConnectionError, IntesisHome
+from pyit600 import (
+    IT600Gateway,
+    IT600AuthenticationError,
+    IT600Error,
+)
+
+from .const import CONF_EUID
+
 import voluptuous as vol
 
 from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateDevice
@@ -10,7 +17,6 @@ from homeassistant.components.climate.const import (
     ATTR_HVAC_MODE,
     HVAC_MODE_HEAT,
     HVAC_MODE_OFF,
-    SUPPORT_TARGET_TEMPERATURE,
 )
 from homeassistant.const import (
     ATTR_TEMPERATURE,
@@ -21,8 +27,6 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.event import async_call_later
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_EUID = "euid"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({vol.Required(CONF_EUID): cv.string})
 
@@ -48,59 +52,57 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     """Create Salus IT600 climate devices."""
     euid = config[CONF_EUID]
 
-    controller = IntesisHome(euid, hass.loop)
+    gateway = IT600Gateway(euid, hass.loop)
     try:
-        await controller.poll_status()
-    except IHAuthenticationError:
+        await gateway.poll_status()
+    except IT600AuthenticationError:
         _LOGGER.error("Invalid EUID")
         return
-    except IHConnectionError:
+    except IT600Error:
         _LOGGER.error("Error connecting to server")
         raise PlatformNotReady
 
-    ih_devices = controller.get_devices()
-    if ih_devices:
+    climate_devices = gateway.get_climate_devices()
+    if climate_devices:
         async_add_entities(
             [
-                IntesisAC(ih_device_id, device, controller)
-                for ih_device_id, device in ih_devices.items()
+                IT600Climate(climate_device_id, device, gateway)
+                for climate_device_id, device in climate_devices.items()
             ],
             True,
         )
     else:
-        _LOGGER.error(
-            "Error getting device list API: %s", controller.error_message,
-        )
-        await controller.stop()
+        _LOGGER.error("Error getting device list API")
+        await gateway.close()
 
 
-class IntesisAC(ClimateDevice):
+class IT600Climate(ClimateDevice):
     """Represents a Salus IT600 smart thermostat."""
 
-    def __init__(self, ih_device_id, ih_device, controller):
+    def __init__(self, device_id, device, gateway):
         """Initialize the thermostat."""
-        self._controller = controller
-        self._device_id = ih_device_id
-        self._ih_device = ih_device
-        self._device_name = ih_device.get("name")
+        self._gateway = gateway
+        self._device_id = device_id
+        self._device = device
+        self._device_name = device.get("name")
         self._connected = None
         self._setpoint_step = 0.5
-        self._current_temp = None
-        self._min_temp = None
-        self._max_temp = None
-        self._target_temp = None
+        self._current_temp = device.get("current_temperature")
+        self._min_temp = device.get("min_temp")
+        self._max_temp = device.get("max_temp")
+        self._target_temp = device.get("target_temperature")
         self._rssi = None
         self._power = False
-        self._hvac_mode = None
+        self._hvac_mode = device.get("hvac_mode")
 
     async def async_added_to_hass(self):
         """Subscribe to event updates."""
-        _LOGGER.debug("Added climate device with state: %s", repr(self._ih_device))
-        await self._controller.add_update_callback(self.async_update_callback)
+        _LOGGER.debug("Added climate device with state: %s", repr(self._device))
+        await self._gateway.add_climate_update_callback(self.async_update_callback)
         try:
-            await self._controller.connect()
-        except IHConnectionError as ex:
-            _LOGGER.error("Exception connecting to IntesisHome: %s", ex)
+            await self._gateway.connect()
+        except IT600Error as ex:
+            _LOGGER.error("Exception connecting to gateway: %s", ex)
 
     @property
     def name(self):
@@ -138,7 +140,9 @@ class IntesisAC(ClimateDevice):
 
         if temperature:
             _LOGGER.debug("Setting %s to %s degrees", self._device_id, temperature)
-            await self._controller.set_temperature(self._device_id, temperature)
+            await self._gateway.set_climate_device_temperature(
+                self._device_id, temperature
+            )
             self._target_temp = temperature
 
         # Write updated temperature to HA state to avoid flapping (API confirmation is slow)
@@ -149,46 +153,46 @@ class IntesisAC(ClimateDevice):
         _LOGGER.debug("Setting %s to %s mode", self._device_type, hvac_mode)
         if hvac_mode == HVAC_MODE_OFF:
             self._power = False
-            await self._controller.set_power_off(self._device_id)
+            await self._gateway.set_power_off(self._device_id)
             # Write changes to HA, API can be slow to push changes
             self.async_write_ha_state()
             return
 
         # First check device is turned on
-        if not self._controller.is_on(self._device_id):
+        if not self._gateway.is_on(self._device_id):
             self._power = True
-            await self._controller.set_power_on(self._device_id)
+            await self._gateway.set_power_on(self._device_id)
 
         # Set the mode
-        await self._controller.set_mode(self._device_id, MAP_HVAC_MODE_TO_IH[hvac_mode])
+        await self._gateway.set_mode(self._device_id, MAP_HVAC_MODE_TO_IH[hvac_mode])
 
         # Send the temperature again in case changing modes has changed it
         if self._target_temp:
-            await self._controller.set_temperature(self._device_id, self._target_temp)
+            await self._gateway.set_temperature(self._device_id, self._target_temp)
 
         # Updates can take longer than 2 seconds, so update locally
         self._hvac_mode = hvac_mode
         self.async_write_ha_state()
 
     async def async_update(self):
-        """Copy values from controller dictionary to climate device."""
-        # Update values from controller's device dictionary
-        self._connected = self._controller.is_connected
+        """Copy values from gateway dictionary to climate device."""
+        # Update values from gateway's device dictionary
+        self._connected = self._gateway.is_connected
         self._setpoint_step = 0.5
-        self._current_temp = self._controller.get_temperature(self._device_id)
-        self._min_temp = self._controller.get_min_setpoint(self._device_id)
-        self._max_temp = self._controller.get_max_setpoint(self._device_id)
-        self._target_temp = self._controller.get_setpoint(self._device_id)
-        self._rssi = self._controller.get_rssi(self._device_id)
-        self._power = self._controller.get_power(self._device_id)
+        self._current_temp = self._gateway.get_temperature(self._device_id)
+        self._min_temp = self._gateway.get_min_setpoint(self._device_id)
+        self._max_temp = self._gateway.get_max_setpoint(self._device_id)
+        self._target_temp = self._gateway.get_setpoint(self._device_id)
+        self._rssi = self._gateway.get_rssi(self._device_id)
+        self._power = self._gateway.get_power(self._device_id)
 
         # Operation mode
-        mode = self._controller.get_mode(self._device_id)
+        mode = self._gateway.get_mode(self._device_id)
         self._hvac_mode = MAP_IH_TO_HVAC_MODE.get(mode)
 
     async def async_will_remove_from_hass(self):
-        """Shutdown the controller when the device is being removed."""
-        await self._controller.stop()
+        """Shutdown the gateway when the device is being removed."""
+        await self._gateway.close()
 
     @property
     def icon(self):
@@ -199,9 +203,9 @@ class IntesisAC(ClimateDevice):
         return icon
 
     async def async_update_callback(self, device_id=None):
-        """Let HA know there has been an update from the controller."""
+        """Let HA know there has been an update from the gateway."""
         # Track changes in connection state
-        if not self._controller.is_connected and self._connected:
+        if not self._gateway.is_connected and self._connected:
             # Connection has dropped
             self._connected = False
             reconnect_minutes = 1 + randrange(10)
@@ -210,11 +214,9 @@ class IntesisAC(ClimateDevice):
                 reconnect_minutes,
             )
             # Schedule reconnection
-            async_call_later(
-                self.hass, reconnect_minutes * 60, self._controller.connect()
-            )
+            async_call_later(self.hass, reconnect_minutes * 60, self._gateway.connect())
 
-        if self._controller.is_connected and not self._connected:
+        if self._gateway.is_connected and not self._connected:
             # Connection has been restored
             self._connected = True
             _LOGGER.debug("Connection to API was restored")
@@ -271,4 +273,4 @@ class IntesisAC(ClimateDevice):
     @property
     def supported_features(self):
         """Return the list of supported features."""
-        return SUPPORT_TARGET_TEMPERATURE
+        return device.get("supported_features")

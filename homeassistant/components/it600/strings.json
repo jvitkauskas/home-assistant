@@ -1,12 +1,19 @@
 {
   "config": {
-    "title": "Salus IT600 smart home gateway",
+    "title": "Salus iT600 smart home gateway",
+    "flow_title": "Salus iT600 smart home gateway: {serial_number}",
     "step": {
       "user": {
-        "title": "Connect to the device",
+        "title": "Connect to Salus iT600 smart home gateway",
         "data": {
-          "host": "Host"
+          "host": "Host or IP address",
+          "port": "Port number",
+          "euid": "EUID"
         }
+      },
+      "zeroconf_confirm": {
+        "description": "Do you want to add the Salus iT600 smart home gateway with serial number `{serial_number}` to Home Assistant?",
+        "title": "Discovered Salus iT600 smart home gateway"
       }
     },
     "error": {
@@ -15,7 +22,10 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "Device is already configured",
+      "connection_error": "Failed to connect to Salus iT600 smart home gateway.",
+      "authentication_error": "Failed to connect or authenticate to Salus iT600 smart home gateway.",
+      "command_error": "Invalid response received from Salus iT600 smart home gateway."
     }
   }
 }

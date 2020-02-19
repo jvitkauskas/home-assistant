@@ -1,12 +1,17 @@
-"""The Salus IT600 smart home gateway integration."""
+"""The Salus iT600 smart home gateway integration."""
 import asyncio
+
+from pyit600 import IT600Gateway, IT600AuthenticationError, IT600ConnectionError
 
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN
+from .const import DATA_IT600_GATEWAY_CLIENT, CONF_EUID, DOMAIN
 
 CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
 
@@ -20,8 +25,22 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up Salus IT600 smart home gateway from a config entry."""
-    # TODO Store an API object for your platforms to access
-    # hass.data[DOMAIN][entry.entry_id] = MyApi(...)
+    session = async_get_clientsession(hass)
+    gateway = IT600Gateway(
+        euid=entry.data[CONF_EUID],
+        host=entry.data[CONF_HOST],
+        port=entry.data[CONF_PORT],
+        session=session,
+    )
+
+    # Ensure we can connect to it
+    try:
+        await gateway.connect()
+    except (IT600AuthenticationError, IT600ConnectionError) as exception:
+        raise ConfigEntryNotReady from exception
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {DATA_IT600_GATEWAY_CLIENT: gateway}
 
     for component in PLATFORMS:
         hass.async_create_task(
